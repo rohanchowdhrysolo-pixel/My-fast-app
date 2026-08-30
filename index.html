@@ -1,0 +1,108 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#07111f">
+<link rel="manifest" href="/manifest.webmanifest">
+<link rel="apple-touch-icon" href="/icon-192.png">
+<title>AI FX Chart Bot v2</title>
+<style>
+:root{--bg:#07111f;--card:#0f1b2d;--line:#263b59;--text:#edf4ff;--muted:#9fb0c9;--blue:#5ea0ff;--green:#32d583;--red:#ff6472;--amber:#ffc14d}
+*{box-sizing:border-box}body{margin:0;background:linear-gradient(180deg,#06101c,#0a1626);color:var(--text);font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif}.wrap{max-width:820px;margin:auto;padding:12px}.top{display:flex;justify-content:space-between;align-items:center;gap:10px}.title{font-size:23px;font-weight:900}.sub{font-size:12px;color:var(--muted);margin-top:2px}.card{background:#0f1b2d;border:1px solid var(--line);border-radius:16px;padding:14px;margin:10px 0}.row{display:grid;grid-template-columns:1fr 1fr;gap:10px}.row3{display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px}h2{font-size:15px;margin:0 0 10px}label{display:block;font-size:12px;color:var(--muted);margin:0 0 5px}select,input,button{width:100%;border:1px solid var(--line);border-radius:11px;background:#081525;color:var(--text);padding:12px;font-size:14px}button{border:0;background:var(--blue);font-weight:850}.secondary{background:#17263c}.green{background:#135536}.drop{border:1px dashed #476486;border-radius:12px;padding:16px;text-align:center}.drop input{margin-top:8px;background:transparent}.preview{display:none;max-width:100%;max-height:320px;border-radius:10px;margin:10px auto 0}.status{color:var(--muted);font-size:12px;min-height:18px;margin-top:8px}.badge{display:inline-block;padding:4px 8px;border-radius:99px;font-size:11px;font-weight:900}.real{background:#123b2a;color:var(--green)}.otc{background:#493817;color:var(--amber)}.signal{font-size:34px;font-weight:950;margin:2px 0 10px}.up{color:var(--green)}.down{color:var(--red)}.neutral{color:var(--amber)}.grid{display:grid;grid-template-columns:repeat(2,1fr);gap:8px}.stat{background:#081525;border-radius:10px;padding:10px}.stat span{font-size:11px;color:var(--muted)}.stat b{display:block;font-size:17px;margin-top:2px}.small{font-size:11px;line-height:1.5;color:var(--muted)}.pill{display:flex;justify-content:space-between;align-items:center;background:#081525;border-radius:10px;padding:10px;margin:6px 0;font-size:12px}.ok{color:var(--green)}.bad{color:var(--red)}.warn{color:var(--amber)}@media(max-width:560px){.row,.row3{grid-template-columns:1fr}.wrap{padding:9px}}
+</style>
+</head>
+<body>
+<div class="wrap">
+<div class="top">
+  <div><div class="title">AI FX Chart Bot v2</div><div class="sub">REAL FX priority • API • database • backtest • screenshot-ready • PWA</div></div>
+  <button id="install" class="secondary" style="width:auto;display:none">Install</button>
+</div>
+
+<div class="card">
+<h2>1. Select exact market</h2>
+<div class="row">
+<div><label>Market</label><select id="market"></select></div>
+<div><label>Timeframe</label><select id="tf"><option value="1min">1 minute</option><option value="5min" selected>5 minutes</option><option value="15min">15 minutes</option></select></div>
+</div>
+<div id="marketInfo" class="status"></div>
+</div>
+
+<div class="card">
+<h2>2. Upload chart screenshot</h2>
+<div class="drop">
+<label style="color:var(--text)">Choose the chart screenshot for the selected market/timeframe.</label>
+<input id="shot" type="file" accept="image/png,image/jpeg,image/webp">
+<img id="preview" class="preview" alt="chart screenshot">
+<div id="shotInfo" class="status"></div>
+</div>
+</div>
+
+<div class="card">
+<h2>3. Data & backtest</h2>
+<div class="row3">
+<button id="sync">Sync candles</button>
+<button id="backtest" class="secondary">Run backtest</button>
+<button id="analyze" class="green">Analyze</button>
+</div>
+<div id="status" class="status"></div>
+</div>
+
+<div class="card" id="result" style="display:none">
+<div style="display:flex;justify-content:space-between;align-items:center"><h2>Result</h2><span id="badge" class="badge"></span></div>
+<div id="signal" class="signal neutral">NO TRADE</div>
+<div class="grid">
+<div class="stat"><span>Backtest win rate</span><b id="wr">—</b></div>
+<div class="stat"><span>Test signals</span><b id="ns">—</b></div>
+<div class="stat"><span>EMA 9 / 21</span><b id="ema">—</b></div>
+<div class="stat"><span>RSI 14</span><b id="rsi">—</b></div>
+</div>
+<p id="reason" class="small"></p>
+</div>
+
+<div class="card">
+<h2>System checks</h2>
+<div id="checks"></div>
+</div>
+
+<div class="card">
+<h2>Important</h2>
+<p class="small">This version is data-driven but it does not guarantee a future win rate. REAL FX is analyzed only when genuine provider data is available. OTC remains NO TRADE until a genuine OTC feed is connected. The screenshot is uploaded and recorded; actual vision-model interpretation is enabled only when a server-side vision API key is configured.</p>
+</div>
+</div>
+
+<script>
+const markets=[
+["EUR/USD","EUR/USD","REAL"],["GBP/USD","GBP/USD","REAL"],["USD/JPY","USD/JPY","REAL"],["AUD/USD","AUD/USD","REAL"],["NZD/USD (Kiwi)","NZD/USD","REAL"],["EUR/GBP","EUR/GBP","REAL"],
+["USD/CAD","USD/CAD","REAL"],["USD/CHF","USD/CHF","REAL"],
+["EUR/USD OTC","EUR/USD","OTC"],["GBP/USD OTC","GBP/USD","OTC"],["USD/JPY OTC","USD/JPY","OTC"],["NZD/USD OTC (Kiwi)","NZD/USD","OTC"]
+];
+const m=document.getElementById("market");
+markets.forEach((x,i)=>{let o=document.createElement("option");o.value=i;o.textContent=`${String(i+1).padStart(2,"0")} • ${x[0]} • ${x[2]}`;m.appendChild(o)});
+function selected(){return markets[+m.value]}
+function info(){let x=selected();document.getElementById("marketInfo").textContent=`Selected: ${x[0]} • type=${x[2]} • provider symbol=${x[1]}`}
+m.onchange=info;info();
+
+const shot=document.getElementById("shot"), preview=document.getElementById("preview");
+shot.onchange=()=>{const f=shot.files[0]; if(!f)return; preview.src=URL.createObjectURL(f);preview.style.display="block";document.getElementById("shotInfo").textContent=`${f.name} • ${(f.size/1024).toFixed(1)} KB • ${f.type}`};
+
+async function getJSON(url,opts){const r=await fetch(url,opts);const d=await r.json();if(!r.ok)throw Error(d.error||"Request failed");return d}
+function show(data){
+document.getElementById("result").style.display="block";
+const s=document.getElementById("signal");s.textContent=data.signal||"NO TRADE";s.className="signal "+(data.signal==="UP"?"up":data.signal==="DOWN"?"down":"neutral");
+document.getElementById("wr").textContent=data.backtest?.win_rate!=null?data.backtest.win_rate+"%":"—";
+document.getElementById("ns").textContent=data.backtest?.signals??"—";
+document.getElementById("ema").textContent=data.indicators?`${data.indicators.ema9} / ${data.indicators.ema21}`:"—";
+document.getElementById("rsi").textContent=data.indicators?.rsi14??"—";
+document.getElementById("reason").textContent=data.reason||"";
+let b=document.getElementById("badge");b.textContent=selected()[2];b.className="badge "+(selected()[2]==="REAL"?"real":"otc");
+}
+document.getElementById("sync").onclick=async()=>{let x=selected();document.getElementById("status").textContent="Syncing real candles…";try{let d=await getJSON(`/api/sync?symbol=${encodeURIComponent(x[1])}&interval=${document.getElementById("tf").value}&limit=500`);document.getElementById("status").textContent=`Saved ${d.saved} candles. Source: ${d.source}`;refreshChecks()}catch(e){document.getElementById("status").textContent=e.message}};
+document.getElementById("backtest").onclick=async()=>{let x=selected();document.getElementById("status").textContent="Running out-of-sample baseline backtest…";try{let d=await getJSON(`/api/backtest?symbol=${encodeURIComponent(x[1])}&interval=${document.getElementById("tf").value}`);show(d);document.getElementById("status").textContent=d.source;refreshChecks()}catch(e){document.getElementById("status").textContent=e.message}};
+document.getElementById("analyze").onclick=async()=>{let x=selected();document.getElementById("status").textContent="Combining market data, indicators, backtest and screenshot context…";try{let fd=new FormData();fd.append("symbol",x[1]);fd.append("market_name",x[0]);fd.append("market_type",x[2]);fd.append("interval",document.getElementById("tf").value);if(shot.files[0])fd.append("screenshot",shot.files[0]);let d=await getJSON("/api/analyze",{method:"POST",body:fd});show(d);document.getElementById("status").textContent=d.source;refreshChecks()}catch(e){document.getElementById("status").textContent=e.message}};
+async function refreshChecks(){try{let d=await getJSON("/api/status");document.getElementById("checks").innerHTML=Object.entries(d).map(([k,v])=>`<div class="pill"><span>${k}</span><b class="${v===true?'ok':v===false?'bad':'warn'}">${v===true?'READY':v===false?'NOT READY':v}</b></div>`).join("")}catch(e){}}
+refreshChecks();
+let deferred;window.addEventListener("beforeinstallprompt",e=>{e.preventDefault();deferred=e;document.getElementById("install").style.display="block"});document.getElementById("install").onclick=()=>deferred?.prompt();
+if("serviceWorker"in navigator)navigator.serviceWorker.register("/sw.js");
+</script>
+</body></html>
