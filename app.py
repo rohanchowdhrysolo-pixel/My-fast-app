@@ -15,8 +15,8 @@ app.config["MAX_CONTENT_LENGTH"] = 8 * 1024 * 1024
 
 TWELVE_DATA_API_KEY = os.getenv("TWELVE_DATA_API_KEY", "").strip()
 VISION_API_KEY = os.getenv("VISION_API_KEY", "").strip()
-VISION_API_URL = os.getenv("VISION_API_URL", "").strip()
-VISION_MODEL = os.getenv("VISION_MODEL", "").strip()
+VISION_API_URL = os.getenv("VISION_API_URL", "https://api.openai.com/v1/responses").strip()
+VISION_MODEL = os.getenv("VISION_MODEL", "gpt-5.6-luna").strip()
 
 REAL_MARKETS = ["EUR/USD", "GBP/USD", "USD/JPY", "AUD/USD", "NZD/USD", "EUR/GBP", "USD/CAD", "USD/CHF"]
 OTC_MARKETS = ["EUR/USD", "GBP/USD", "USD/JPY", "NZD/USD"]
@@ -34,9 +34,17 @@ def db():
     c = sqlite3.connect(DB, timeout=30)
     c.row_factory = sqlite3.Row
     c.execute("PRAGMA journal_mode=WAL")
-    c.execute("""CREATE TABLE IF NOT EXISTS candles( symbol TEXT, timeframe TEXT, ts TEXT, open REAL, high REAL, low REAL, close REAL, volume REAL, source TEXT, PRIMARY KEY(symbol,timeframe,ts))""")
-    c.execute("""CREATE TABLE IF NOT EXISTS screenshots( id INTEGER PRIMARY KEY AUTOINCREMENT, symbol TEXT, timeframe TEXT, market_type TEXT, filename TEXT, path TEXT, width INTEGER, height INTEGER, uploaded_at TEXT, vision_status TEXT)""")
-    c.execute("""CREATE TABLE IF NOT EXISTS analyses( id INTEGER PRIMARY KEY AUTOINCREMENT, created_at TEXT, symbol TEXT, market_type TEXT, requested_tf TEXT, final_signal TEXT, evidence_score REAL, calibrated_win_rate REAL, validation_signals INTEGER, regime TEXT, data_quality TEXT, spread_pips REAL, slippage_pips REAL, reasons_json TEXT, context_json TEXT, screenshot_vision TEXT, outcome TEXT)""")
+    c.execute("""CREATE TABLE IF NOT EXISTS candles(
+        symbol TEXT, timeframe TEXT, ts TEXT, open REAL, high REAL, low REAL, close REAL, volume REAL, source TEXT,
+        PRIMARY KEY(symbol,timeframe,ts))""")
+    c.execute("""CREATE TABLE IF NOT EXISTS screenshots(
+        id INTEGER PRIMARY KEY AUTOINCREMENT, symbol TEXT, timeframe TEXT, market_type TEXT, filename TEXT,
+        path TEXT, width INTEGER, height INTEGER, uploaded_at TEXT, vision_status TEXT)""")
+    c.execute("""CREATE TABLE IF NOT EXISTS analyses(
+        id INTEGER PRIMARY KEY AUTOINCREMENT, created_at TEXT, symbol TEXT, market_type TEXT,
+        requested_tf TEXT, final_signal TEXT, evidence_score REAL, calibrated_win_rate REAL, validation_signals INTEGER,
+        regime TEXT, data_quality TEXT, spread_pips REAL, slippage_pips REAL, reasons_json TEXT, context_json TEXT,
+        screenshot_vision TEXT, outcome TEXT)""")
     c.execute("CREATE INDEX IF NOT EXISTS idx_candles ON candles(symbol,timeframe,ts)")
     c.execute("CREATE INDEX IF NOT EXISTS idx_analyses ON analyses(symbol,created_at)")
     c.commit()
@@ -104,22 +112,23 @@ def parse_dt(s):
     return d.replace(tzinfo=timezone.utc) if d.tzinfo is None else d.astimezone(timezone.utc)
 
 
-def aggregate(rows, minutes):
+def aggregate(rows, minutes, source_minutes):
+    """Build derived candles only from complete source buckets."""
     if not rows: return []
-    bucket = {}
-    step = timedelta(minutes=minutes)
+    expected=max(1, int(minutes/source_minutes))
+    step=timedelta(minutes=minutes)
+    bucket={}
     for r in rows:
-        t = parse_dt(r["ts"])
-        epoch = int(t.timestamp())
-        start = epoch - (epoch % int(step.total_seconds()))
-        k = datetime.fromtimestamp(start, timezone.utc)
-        b = bucket.setdefault(k, [])
-        b.append(r)
-    out = []
+        t=parse_dt(r["ts"]); epoch=int(t.timestamp())
+        start_epoch=epoch-(epoch % int(step.total_seconds()))
+        k=datetime.fromtimestamp(start_epoch,timezone.utc)
+        bucket.setdefault(k,[]).append(r)
+    out=[]
     for k in sorted(bucket):
-        b = sorted(bucket[k], key=lambda x: parse_dt(x["ts"]))
-        # Require a sufficiently complete bucket; gaps are handled by data-quality checks.
-        out.append({"ts": k.isoformat(), "open": b[0]["open"], "high": max(x["high"] for x in b), "low": min(x["low"] for x in b), "close": b[-1]["close"], "volume": sum(x.get("volume", 0.0) for x in b)})
+        b=sorted(bucket[k],key=lambda x:parse_dt(x["ts"]))
+        if len(b)!=expected: continue
+        if any(abs((parse_dt(z["ts"])-parse_dt(a["ts"])).total_seconds()/60-source_minutes)>0.01 for a,z in zip(b,b[1:])): continue
+        out.append({"ts":k.isoformat(),"open":b[0]["open"],"high":max(x["high"] for x in b),"low":min(x["low"] for x in b),"close":b[-1]["close"],"volume":sum(x.get("volume",0.0) for x in b)})
     return out
 
 
@@ -272,7 +281,10 @@ def layer_signal(rows, tf):
 
 
 def build_timeframes(base1, base5, base15):
-    return {"1M":base1,"3M":aggregate(base1,3),"5M":base5,"10M":aggregate(base5,2),"15M":base15,"50M":aggregate(base5,10)}
+    return {"1M":base1,"3M":aggregate(base1,3,1),"5M":base5,"10M":aggregate(base5,10,5),"15M":base15,"50M":aggregate(base5,50,5)}
+
+
+TF_MINUTES={"1M":1,"3M":3,"5M":5,"10M":10,"15M":15,"50M":50}
 
 
 def direction_vote(layers):
@@ -302,9 +314,24 @@ def vision_optional(path,symbol,tf):
         try:
             with Image.open(path) as im:mime=Image.MIME.get(im.format,"image/jpeg")
         except Exception: pass
-        payload={"model":VISION_MODEL,"input":[{"role":"user","content":[{"type":"input_text","text":f"Analyze this FX chart for {symbol}, requested timeframe {tf}. Return strict JSON with trend (UP/DOWN/NEUTRAL), support, resistance, candle_structure, visible_indicators, warnings. Do not claim certainty or guaranteed profit."},{"type":"input_image","image_url":f"data:{mime};base64,{b64}"}]}]}
+        payload={"model":VISION_MODEL,"input":[{"role":"user","content":[{"type":"input_text","text":f"Analyze this FX chart for {symbol}, requested timeframe {tf}. Return strict JSON with detected_timeframe, timeframe_match (true/false/unknown), trend (UP/DOWN/NEUTRAL), support, resistance, candle_structure, visible_indicators, warnings. Do not claim certainty or guaranteed profit. If the screenshot does not clearly show the chart timeframe, use unknown and do not guess."},{"type":"input_image","image_url":f"data:{mime};base64,{b64}"}]}]}
         r=requests.post(VISION_API_URL,headers={"Authorization":f"Bearer {VISION_API_KEY}","Content-Type":"application/json"},json=payload,timeout=45); r.raise_for_status()
-        return {"status":"ok","result":r.json()}
+        data=r.json(); text=None
+        for item in data.get("output",[]) if isinstance(data,dict) else []:
+            for content in item.get("content",[]) if isinstance(item,dict) else []:
+                if isinstance(content,dict) and content.get("type") in {"output_text","text"} and content.get("text"):
+                    text=content["text"]; break
+            if text: break
+        parsed=None
+        if text:
+            try:
+                cleaned=text.strip()
+                if cleaned.startswith("```"):
+                    cleaned=cleaned.strip("`").replace("json", "", 1).strip()
+                parsed=json.loads(cleaned)
+            except Exception:
+                parsed=None
+        return {"status":"ok","result":data,"text":text,"parsed":parsed}
     except Exception as e:return {"status":"error","error":str(e)}
 
 
@@ -347,6 +374,10 @@ def fuse(symbol, layers, validation, quote, vision):
     if quote.get("spread_pips",99)>float(os.getenv("MAX_SPREAD_PIPS","4.0")):reasons.append("SPREAD_TOO_HIGH")
     vision_status=vision.get("status") if isinstance(vision,dict) else "not_configured"
     if vision_status=="error":reasons.append("VISION_ERROR")
+    if vision_status=="ok":
+        parsed=vision.get("parsed") or {}
+        if isinstance(parsed,dict) and parsed.get("timeframe_match") is False:
+            reasons.append("VISION_TIMEFRAME_MISMATCH")
     # Vision is confirmatory only; never overrides market data.
     if vision_status=="ok":
         txt=json.dumps(vision.get("result",{})).upper()
@@ -383,7 +414,7 @@ def index(): return send_from_directory(".","index.html")
 
 @app.get("/api/status")
 def status():
-    db(); return jsonify({"FX_API":bool(TWELVE_DATA_API_KEY),"Database":DB.exists(),"Screenshot_upload":True,"Vision_AI":bool(VISION_API_KEY and VISION_API_URL and VISION_MODEL),"REAL_market_priority":True,"OTC_genuine_feed":False,"PWA":True,"timeframes":TIMEFRAMES,"engine":"Multi-Layer Hybrid Decision Engine v3"})
+    db(); return jsonify({"FX_API":bool(TWELVE_DATA_API_KEY),"Database":DB.exists(),"Screenshot_upload":True,"Vision_AI":bool(VISION_API_KEY and VISION_API_URL and VISION_MODEL),"Vision_API_URL_configured":bool(VISION_API_URL),"Vision_model_configured":bool(VISION_MODEL),"REAL_market_priority":True,"OTC_genuine_feed":False,"PWA":True,"timeframes":TIMEFRAMES,"engine":"Multi-Layer Hybrid Decision Engine v3"})
 
 @app.get("/api/sync")
 def sync():
@@ -400,7 +431,7 @@ def backtest():
     try:
         bundle=fetch_bundle(symbol); quote=get_quote(symbol); out={}
         for tf,rows in bundle.items():
-            q=data_quality(rows,1 if tf in {"1M","3M","5M","10M","15M","50M"} else 5,10 if tf=="1M" else 30)
+            q=data_quality(rows,TF_MINUTES[tf],10 if tf=="1M" else max(30,TF_MINUTES[tf]*2))
             out[tf]={"quality":q,"backtest":validation_backtest(rows,quote["spread_pips"],float(os.getenv("SLIPPAGE_PIPS","0.5")))}
         return jsonify({"symbol":symbol,"results":out,"source":"REAL FX historical data; walk-forward research test with configurable spread/slippage."})
     except Exception as e:return jsonify({"error":str(e)}),502
@@ -414,7 +445,7 @@ def analyze():
     try:
         bundle=fetch_bundle(symbol); quote=get_quote(symbol); layers={}; quality={}
         for tf,rows in bundle.items():
-            q=data_quality(rows,1 if tf in {"1M","3M","5M","10M","15M","50M"} else 5,10 if tf=="1M" else 30); quality[tf]=q
+            q=data_quality(rows,TF_MINUTES[tf],10 if tf=="1M" else max(30,TF_MINUTES[tf]*2)); quality[tf]=q
             if q["status"]=="PASS" and len(rows)>=80: layers[tf]=layer_signal(rows,tf)
             else: layers[tf]={"timeframe":tf,"signal":"NO TRADE","score":0,"direction_gap":0,"reasons":q["reasons"] or ["DATA_QUALITY_FAIL"],"up_score":0,"down_score":0,"features":{},"regime":"UNSTABLE"}
         validation=validation_backtest(bundle[requested],quote["spread_pips"],float(os.getenv("SLIPPAGE_PIPS","0.5")))
@@ -444,4 +475,4 @@ def journal():
 def health(): return jsonify({"ok":True,"time":utc_now().isoformat()})
 
 if __name__=="__main__":
-    db(); app.run(host="0.0.0.0",port=int(os.getenv("PORT","5000")),debug=False) 
+    db(); app.run(host="0.0.0.0",port=int(os.getenv("PORT","5000")),debug=False)
