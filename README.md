@@ -1,48 +1,43 @@
-# AI FX Chart Bot v2 — READY Foundation
+# AI FX Hybrid Chart Analysis Engine — FINAL v3
 
-## Included
-- Mobile-first PWA with Home Screen install support.
-- REAL FX markets are listed before OTC.
-- Exact market selection before screenshot upload.
-- REAL FX provider adapter using Twelve Data.
-- 1min / 5min / 15min.
-- SQLite candle cache/database.
-- Chronological 70/30 out-of-sample baseline backtest.
-- Wilder RSI(14), EMA 9/21.
-- Screenshot upload + metadata storage.
-- Optional server-side vision hook.
-- Conservative NO TRADE gate.
-- OTC intentionally disabled until a genuine OTC feed is connected.
+## What this build fixes
+- REAL FX only; OTC remains disabled until a genuine broker-specific OTC feed exists.
+- Native 1M / 5M / 15M Twelve Data candles.
+- Derived 3M / 10M / 50M candles are built only from complete, correctly spaced source candles.
+- Timeframe-aware data-quality checks: 3M/10M/15M/50M are no longer falsely marked as `DATA_GAPS` just because their candle spacing is larger than 1 minute.
+- Screenshot timeframe is treated separately from market-data timeframe; optional Vision checks the visible timeframe and can block on mismatch.
+- Multi-timeframe quant + price action + regime + validation + spread/slippage + abstention gates.
+- NO TRADE is intentional when evidence is weak/conflicting or validation is poor.
+- PWA manifest, service worker, and mobile icons included.
 
-## Fast start
-1. Create a Twelve Data account and obtain an API key.
-2. Set `TWELVE_DATA_API_KEY` as a server environment secret. Do NOT put it in HTML.
-3. Install:
-   `pip install -r requirements.txt`
-4. Run:
-   `python app.py`
-5. Open `http://127.0.0.1:5000`.
-6. Select EUR/USD, GBP/USD, NZD/USD (Kiwi), etc.
-7. Choose 1m/5m/15m.
-8. Click Sync candles.
-9. Run backtest.
-10. Upload a matching screenshot and click Analyze.
+## Environment variables on Render
+Required:
+- `TWELVE_DATA_API_KEY` = your Twelve Data key
 
-## Important
-- The Twelve Data feed supports 1min/5min/15min intraday intervals and historical time-series access, subject to plan/credits and data availability.
-- The REST feed is not HFT execution infrastructure. For very low latency, a provider WebSocket is a separate stage.
-- No future accuracy is guaranteed.
-- The baseline backtest is deliberately conservative and should be replaced by walk-forward testing, transaction-cost/spread modeling, and multiple out-of-sample periods before real-money use.
-- OTC is NO TRADE until a genuine broker/provider OTC feed is integrated.
-- The optional vision hook requires a compatible server-side vision endpoint; it is not falsely advertised as active when not configured.
+Vision:
+- `VISION_API_KEY` = your OpenAI API key
+- `VISION_API_URL` = `https://api.openai.com/v1/responses`
+- `VISION_MODEL` = `gpt-5.6-luna`
 
-## Next production stages
-A. Provider verification + spread/session handling
-B. Historical data pagination and database retention
-C. Walk-forward / multi-window backtesting
-D. Multi-timeframe confirmation
-E. Support/resistance + candlestick + price-action features
-F. Screenshot vision model with structured JSON output
-G. Hybrid confirmation engine
-H. Paper trading + audit logs
-I. Monitoring and deployment
+Optional:
+- `SLIPPAGE_PIPS` = `0.5`
+- `MAX_SPREAD_PIPS` = `4.0`
+
+Never put API keys in `index.html` or GitHub.
+
+## Render
+Build command:
+`pip install -r requirements.txt`
+
+Start command:
+`gunicorn app:app`
+
+## Verification
+1. `/health` must return `{"ok":true,...}`.
+2. `/api/status` must show `FX_API: true`, `Vision_AI: true`, `Database: true`, and the six timeframes.
+3. Run DATA SYNC for a REAL pair.
+4. Analyze a screenshot with the requested timeframe selected.
+5. Check that 3M/10M/15M/50M are not falsely rejected as `DATA_GAPS` merely because of their normal candle spacing.
+6. A weak/negative validation result should remain `NO TRADE`; do not lower safety gates merely to force UP/DOWN.
+
+This is a research/paper-trading system. Evidence score is not a probability and no profit/accuracy guarantee is made.
