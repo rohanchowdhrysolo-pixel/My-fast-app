@@ -1,0 +1,6 @@
+data.db
+data.db-*
+uploads/
+__pycache__/
+*.pyc
+.DS_Store
